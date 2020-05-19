@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -71,10 +72,22 @@ type AcceptOptions struct {
 //
 // Accept will write a response to w on all errors.
 func Accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn, error) {
+	conn, _, err := accept(w, r, opts)
+	return conn, err
+}
+
+// AcceptConn accepts a WebSocket handshake from a client and upgrades the
+// the connection to a WebSocket.
+//
+// AcceptConn will not allow cross origin requests by default.
+// See the InsecureSkipVerify and OriginPatterns options to allow cross origin requests.
+//
+// AcceptConn will write a response to w on all errors.
+func AcceptConn(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn, net.Conn, error) {
 	return accept(w, r, opts)
 }
 
-func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Conn, err error) {
+func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Conn, _ net.Conn, err error) {
 	defer errd.Wrap(&err, "failed to accept WebSocket connection")
 
 	if opts == nil {
@@ -85,7 +98,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 	errCode, err := verifyClientRequest(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), errCode)
-		return nil, err
+		return nil, nil, err
 	}
 
 	if !opts.InsecureSkipVerify {
@@ -96,7 +109,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 				err = errors.New(http.StatusText(http.StatusForbidden))
 			}
 			http.Error(w, err.Error(), http.StatusForbidden)
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -104,7 +117,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 	if !ok {
 		err = errors.New("http.ResponseWriter does not implement http.Hijacker")
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
-		return nil, err
+		return nil, nil, err
 	}
 
 	w.Header().Set("Upgrade", "websocket")
@@ -120,7 +133,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 
 	copts, err := acceptCompression(r, w, opts.CompressionMode)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	w.WriteHeader(http.StatusSwitchingProtocols)
@@ -135,7 +148,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 	if err != nil {
 		err = fmt.Errorf("failed to hijack connection: %w", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return nil, err
+		return nil, nil, err
 	}
 
 	// https://github.com/golang/go/issues/32314
@@ -151,7 +164,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 
 		br: brw.Reader,
 		bw: brw.Writer,
-	}), nil
+	}), netConn, nil
 }
 
 func verifyClientRequest(w http.ResponseWriter, r *http.Request) (errCode int, _ error) {
