@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -97,28 +98,45 @@ func verifyClientRequest(w http.ResponseWriter, r *http.Request) error {
 // If an error occurs, Accept will always write an appropriate response so you do not
 // have to.
 func Accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn, error) {
-	c, err := accept(w, r, opts)
+	c, _, err := accept(w, r, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to accept websocket connection: %w", err)
 	}
 	return c, nil
 }
 
-func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn, error) {
+// AcceptConn accepts a WebSocket handshake from a client and upgrades the
+// the connection to a WebSocket.
+//
+// AcceptConn will reject the handshake if the Origin domain is not the same as the Host unless
+// the InsecureSkipVerify option is set. In other words, by default it does not allow
+// cross origin requests.
+//
+// If an error occurs, AcceptConn will always write an appropriate response so you do not
+// have to.
+func AcceptConn(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn, net.Conn, error) {
+	c, netConn, err := accept(w, r, opts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to accept websocket connection: %w", err)
+	}
+	return c, netConn, nil
+}
+
+func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn, net.Conn, error) {
 	if opts == nil {
 		opts = &AcceptOptions{}
 	}
 
 	err := verifyClientRequest(w, r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if !opts.InsecureSkipVerify {
 		err = authenticateOrigin(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -126,7 +144,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn,
 	if !ok {
 		err = errors.New("passed ResponseWriter does not implement http.Hijacker")
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
-		return nil, err
+		return nil, nil, err
 	}
 
 	w.Header().Set("Upgrade", "websocket")
@@ -145,7 +163,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn,
 	if err != nil {
 		err = fmt.Errorf("failed to hijack connection: %w", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return nil, err
+		return nil, nil, err
 	}
 
 	// https://github.com/golang/go/issues/32314
@@ -160,7 +178,7 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (*Conn,
 	}
 	c.init()
 
-	return c, nil
+	return c, netConn, nil
 }
 
 func headerValuesContainsToken(h http.Header, key, token string) bool {
